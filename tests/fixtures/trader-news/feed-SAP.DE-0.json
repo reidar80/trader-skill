@@ -1,0 +1,6 @@
+{"version": "https://jsonfeed.org/version/1.1", "title": "SAP ad hoc (synthetic test feed)",
+ "items": [
+  {"id": "sap-adhoc-77", "url": "https://example.org/sap/adhoc/77",
+   "title": "SAP SE: Ad-hoc: Prognose angehoben", "content_text": "SAP hebt die Jahresprognose an.",
+   "date_published": "2026-10-13T16:05:00+02:00", "tags": ["Ad-hoc"]}
+ ]}

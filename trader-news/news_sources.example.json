@@ -1,0 +1,30 @@
+{
+  "_readme": [
+    "Copy to trader/news_sources.json. One entry per ticker as you hold it (Yahoo symbol with exchange suffix).",
+    "feeds: RSS 2.0, Atom or JSON Feed URLs that carry the company's regulatory announcements.",
+    "Where to find one: the issuer's investor-relations page (look for RSS or 'subscribe'), its newswire",
+    "page (GlobeNewswire organization RSS, Cision/Mynewsdesk RSS, MFN feed) or a feed your broker gives you.",
+    "Open the URL in a browser first: it must return XML or JSON, not a web page.",
+    "sec: the company's US ticker (an ADR) if it has one, to also read its SEC 6-K filings.",
+    "name: the company name, so headlines that mention it are matched to the ticker.",
+    "The URLs below are placeholders, not working feeds."
+  ],
+  "EQNR.OL": {
+    "name": "Equinor",
+    "sec": "EQNR",
+    "feeds": [
+      {"label": "Equinor IR", "url": "https://REPLACE-WITH-EQUINOR-IR-RSS-URL"}
+    ]
+  },
+  "NOVO-B.CO": {
+    "name": "Novo Nordisk",
+    "sec": "NVO",
+    "feeds": [
+      {"label": "GlobeNewswire", "url": "https://www.globenewswire.com/RssFeed/organization/REPLACE-WITH-ORG-ID"}
+    ]
+  },
+  "VOLV-B.ST": {
+    "name": "Volvo",
+    "feeds": ["https://REPLACE-WITH-VOLVO-PRESS-RSS-URL"]
+  }
+}

@@ -1,0 +1,22 @@
+{
+ "cik": "1140625",
+ "name": "Equinor ASA",
+ "tickers": [
+  "EQNR"
+ ],
+ "exchanges": [
+  "NYSE"
+ ],
+ "filings": {
+  "recent": {
+   "form": [
+    "6-K",
+    "6-K",
+    "SC 13G/A",
+    "6-K",
+    "20-F",
+    "6-K"
+   ]
+  }
+ }
+}

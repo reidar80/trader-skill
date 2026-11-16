@@ -55,7 +55,7 @@ environment variable.
 | command | job | what it does |
 | --- | --- | --- |
 | `/trader-copycat` | Reverse Engineer | Reads an investor's 13F-HR on SEC EDGAR and rebuilds their portfolio as weights you can copy, with what they bought, added, trimmed and sold since last quarter. |
-| `/trader-news` | News Monitor | Watches headlines and SEC filings (8-Ks) for every stock you hold and flags what touches them. |
+| `/trader-news` | News Monitor | Watches headlines, SEC filings (8-K, or 6-K for foreign issuers) and the European exchange-announcement feeds you configure for every stock you hold, and flags what touches them. |
 | `/trader-budget` | Budget Manager | Sizes every position to your budget, keeps a cash buffer and caps any one stock. |
 | `/trader-pelosi` | Pelosi Tracker | Reads Congress's stock-trade disclosures (House PTRs) as soon as they post, turns each PDF into clean rows and alerts you once per new filing. |
 | `/trader-analyst` | Earnings Analyst | Pulls each company's reported numbers from SEC XBRL (revenue, net income, diluted EPS, margins, growth) and its latest earnings release. |
@@ -113,7 +113,7 @@ polite about it (SEC's rule: identify yourself, at most 10 requests a second).
 python3 trader-copycat/edgar13f.py find buffett                        # a filer's CIK
 python3 trader-copycat/edgar13f.py filings 1067983                     # its 13F-HR filings
 python3 trader-copycat/edgar13f.py --help                              # holdings, diff, copy
-python3 trader-news/news.py --tickers AAPL AXP GOOGL KO BAC --hours 24 # headlines + 8-Ks
+python3 trader-news/news.py --tickers AAPL AXP GOOGL KO BAC --hours 24 # headlines + 8-Ks (6-Ks for foreign issuers)
 python3 trader-pelosi/ptr.py index --member pelosi                     # her PTRs this year
 python3 trader-pelosi/ptr.py --help                                    # new, fetch, parse
 python3 trader-analyst/facts.py AAPL                                   # quarters, growth, EPS
@@ -172,7 +172,7 @@ is not tax advice.
 
 ```
 trader-copycat/    SKILL.md, edgar13f.py, filers.json, share_classes.json, targets.example.json
-trader-news/       SKILL.md, news.py
+trader-news/       SKILL.md, news.py, news_sources.example.json
 trader-budget/     SKILL.md, size.py, config.example.json, targets.example.json
 trader-pelosi/     SKILL.md, ptr.py
 trader-analyst/    SKILL.md, facts.py, metrics.example.json

@@ -33,5 +33,10 @@
 "cik_str": 1652044,
 "ticker": "GOOG",
 "title": "Alphabet Inc."
+},
+"9999": {
+"cik_str": 1140625,
+"ticker": "EQNR",
+"title": "Equinor ASA"
 }
 }
