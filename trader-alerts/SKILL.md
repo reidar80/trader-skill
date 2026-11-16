@@ -58,6 +58,10 @@ python3 "${CLAUDE_SKILL_DIR}/alerts.py" reset aapl-above-350
 - `stooq`: `stooq.com/q/l/?s=aapl.us&f=sd2t2ohlcv&h&e=csv`, Stooq's free CSV.
   It answered 404 when this was written (2026-10-13); the parser stays for
   when it is back. Use `--source stooq` to try it.
+- European and other non-US listings: use Yahoo's suffixed symbol (`EQNR.OL`,
+  `VOLV-B.ST`, `SAP.DE`, `VOD.L`) with the `yahoo` source; prices print in
+  the listing's currency. The `stooq` source reads US tickers only. The
+  clock and the opening bell are the NYSE's, not Oslo's or Frankfurt's.
 - Free quotes are delayed. They are fine for alerts and for checking sizes,
   not for timing an order. The broker's price is the one that fills.
 - If both are down, read prices from the broker connector (Alpaca

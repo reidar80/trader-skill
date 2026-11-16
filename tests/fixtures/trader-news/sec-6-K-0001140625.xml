@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="ISO-8859-1" ?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <company-info><cik>0001140625</cik><conformed-name>Equinor ASA</conformed-name></company-info>
+  <title>Equinor ASA (0001140625)</title>
+  <entry>
+    <category label="form type" scheme="https://www.sec.gov/" term="6-K"/>
+    <content type="text/xml">
+      <accession-number>0001140625-26-000101</accession-number>
+      <filing-date>2026-10-13</filing-date>
+      <filing-type>6-K</filing-type>
+      <form-name>Current report of foreign issuer pursuant to Rules 13a-16 and 15d-16</form-name>
+    </content>
+    <link href="https://www.sec.gov/Archives/edgar/data/1140625/000114062526000101/0001140625-26-000101-index.htm" rel="alternate" type="text/html"/>
+    <title>6-K  - Current report of foreign issuer</title>
+    <updated>2026-10-13T08:15:00-04:00</updated>
+  </entry>
+</feed>

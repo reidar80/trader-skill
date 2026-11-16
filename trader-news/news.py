@@ -1,28 +1,40 @@
 #!/usr/bin/env python3
 """News monitor for trader-news. Standard library only.
 
-Watches headlines and SEC filings for the stocks you hold (or plan to copy)
-and prints only what is new since the last check, newest first, with a flag
-on anything that touches your positions.
+Watches headlines, SEC filings and exchange announcements for the stocks you
+hold (or plan to copy) and prints only what is new since the last check,
+newest first, with a flag on anything that touches your positions.
 
     python3 news.py                                  # tickers from trader/portfolio.json or targets.json
     python3 news.py --tickers AAPL AXP GOOGL KO BAC
     python3 news.py --tickers AAPL --all --hours 72  # everything in the last 3 days, seen or not
     python3 news.py --no-sec                         # headlines only
+    python3 news.py --tickers EQNR.OL NOVO-B.CO SAP.DE  # European listings, Yahoo suffixes
 
 Sources, one request each per ticker:
-  - Yahoo Finance headline RSS:
-    https://feeds.finance.yahoo.com/rss/2.0/headline?s=<TICKER>&region=US&lang=en-US
-  - SEC EDGAR filings Atom feed for the company (8-K by default: earnings,
-    executive changes, deals, restatements):
+  - Yahoo Finance headline RSS, with the region taken from the exchange suffix
+    (EQNR.OL -> region=NO, SAP.DE -> region=DE, plain AAPL -> region=US):
+    https://feeds.finance.yahoo.com/rss/2.0/headline?s=<TICKER>&region=<CC>&lang=en-US
+  - SEC EDGAR filings Atom feed for the company. Form "auto" (the default)
+    reads 8-K for US filers and 6-K for foreign private issuers (companies
+    that file 20-F or 40-F annual reports, such as European ADRs), decided
+    once per company from data.sec.gov/submissions and cached:
     https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=<CIK>&type=8-K&count=10&output=atom
     SEC needs a User-Agent with your name and email (sec_user_agent in
     trader/config.json or SEC_USER_AGENT). Without one the SEC part is skipped
     and the tool says so; headlines still run.
+  - Exchange announcements (regulatory news under the EU Market Abuse
+    Regulation) from feeds you list per ticker in trader/news_sources.json:
+    any RSS 2.0, Atom or JSON Feed URL, e.g. the issuer's GlobeNewswire,
+    Cision or MFN feed or its investor-relations RSS. See
+    news_sources.example.json. A listing outside the US with no feed is named
+    in the notes on every run, because quiet is not the same as nothing
+    announced.
 
 State: trader/state/news.json remembers what you have seen (30 days), so an
 item shows once. Offline: --offline DIR reads yahoo-<TICKER>.xml,
-sec-<FORM>-<CIK>.xml and company_tickers.json from DIR. The tests use it.
+sec-<FORM>-<CIK>.xml, submissions-CIK<CIK>.json, feed-<TICKER>-<N>.xml|json
+and company_tickers.json from DIR. The tests use it.
 
 Headlines are leads, not facts: open the story before acting, and treat
 nothing here as advice.
@@ -39,13 +51,39 @@ import re
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
 
-YAHOO = "https://feeds.finance.yahoo.com/rss/2.0/headline?s=%s&region=US&lang=en-US"
+YAHOO = "https://feeds.finance.yahoo.com/rss/2.0/headline?s=%s&region=%s&lang=en-US"
 SEC_FEED = ("https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=%s&type=%s"
             "&dateb=&owner=include&count=%d&output=atom")
 TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
+SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK%s.json"
+FOREIGN_FORMS = {"20-F", "20-F/A", "40-F", "40-F/A", "6-K", "6-K/A"}
+DOMESTIC_FORMS = {"10-K", "10-K/A", "10-Q", "10-Q/A", "8-K", "8-K/A"}
+FILER_TTL_DAYS = 30
+
+# Yahoo exchange suffix -> (country code for Yahoo's region, venue). A
+# suffix of two or more letters is always read as an exchange; a single
+# letter (BRK.B, BF.B) is a US share class, except L (London) and F
+# (Frankfurt).
+EXCHANGES = {
+    "OL": ("NO", "Oslo Bors"), "ST": ("SE", "Nasdaq Stockholm"),
+    "CO": ("DK", "Nasdaq Copenhagen"), "HE": ("FI", "Nasdaq Helsinki"),
+    "IC": ("IS", "Nasdaq Iceland"), "DE": ("DE", "Xetra"), "F": ("DE", "Frankfurt"),
+    "BE": ("DE", "Berlin"), "DU": ("DE", "Dusseldorf"), "HM": ("DE", "Hamburg"),
+    "HA": ("DE", "Hanover"), "MU": ("DE", "Munich"), "SG": ("DE", "Stuttgart"),
+    "PA": ("FR", "Euronext Paris"), "AS": ("NL", "Euronext Amsterdam"),
+    "BR": ("BE", "Euronext Brussels"), "LS": ("PT", "Euronext Lisbon"),
+    "IR": ("IE", "Euronext Dublin"), "MI": ("IT", "Euronext Milan"),
+    "MC": ("ES", "Bolsa de Madrid"), "L": ("GB", "London Stock Exchange"),
+    "IL": ("GB", "London Stock Exchange (international)"), "SW": ("CH", "SIX Swiss Exchange"),
+    "VI": ("AT", "Wiener Borse"), "WA": ("PL", "Warsaw"), "AT": ("GR", "Athens"),
+    "PR": ("CZ", "Prague"), "BD": ("HU", "Budapest"),
+}
+# Exchange prefixes press releases put before a symbol ("OSE: EQNR").
+VENUE_PREFIXES = r"(?:OSE|OB|OSL|OSLO|STO|CPH|HEL|ICE|ETR|XETRA|FRA|EPA|AMS|EBR|ELI|ISE|BIT|MIL|BME|LON|LSE|SIX|SWX|VIE|WSE)"
 PLACEHOLDER = "you@example.com"
 BROWSER_UA = "Mozilla/5.0 (compatible; trader-skill/1.0; +https://github.com/Jakeschincariol/trader-skill)"
 KEEP_DAYS = 30
@@ -62,15 +100,42 @@ ITEMS_8K = {
     "7.01": "Regulation FD disclosure", "8.01": "other events", "9.01": "exhibits",
 }
 IMPORTANT_ITEMS = {"1.03", "1.05", "2.02", "2.04", "2.06", "3.01", "4.02", "5.01", "5.02"}
+# English first, then the Nordic and German terms European issuers use in
+# their own-language announcements (Norwegian, Swedish, Danish, Finnish,
+# German).
 KEYWORDS = [
-    ("earnings", r"\bearnings\b|\bresults\b|\bEPS\b|\bguidance\b|\bforecast\b"),
-    ("analyst", r"\bupgrade[sd]?\b|\bdowngrade[sd]?\b|price target|\boutperform\b|\bunderperform\b"),
-    ("legal", r"\blawsuit\b|\bsued\b|\bprobe\b|\binvestigation\b|\bSEC charges\b|\bantitrust\b|\bjudge\b|\bcourt\b"),
-    ("deal", r"\bacqui(?:re|res|red|sition)\b|\bmerger\b|\bbuyout\b|\btakeover\b|\bdeal\b"),
-    ("capital", r"\bdividend\b|\bbuyback\b|\brepurchase\b|\bstock split\b|\boffering\b"),
-    ("people", r"\bCEO\b|\bCFO\b|\bresign|\bsteps down\b|\bappoint"),
-    ("risk", r"\brecall\b|\bbankrupt|\bdefault\b|\bdelist|\bhack|\bbreach\b|\boutage\b"),
+    ("earnings", r"\bearnings\b|\bresults\b|\bEPS\b|\bguidance\b|\bforecast\b"
+                 r"|\binterim report\b|\bhalf-year report\b|\bannual report\b|\btrading update\b"
+                 r"|kvartalsrapport|delårsrapport|halvårsrapport|årsrapport|bokslutskommuniké"
+                 r"|\bresultat\b|osavuosikatsaus|puolivuosikatsaus|tilinpäätös"
+                 r"|Quartalsmitteilung|Halbjahresfinanzbericht|Geschäftsbericht|Jahresergebnis"),
+    ("analyst", r"\bupgrade[sd]?\b|\bdowngrade[sd]?\b|price target|\boutperform\b|\bunderperform\b"
+                r"|kursmål|Kursziel"),
+    ("legal", r"\blawsuit\b|\bsued\b|\bprobe\b|\binvestigation\b|\bSEC charges\b|\bantitrust\b|\bjudge\b|\bcourt\b"
+              r"|søksmål|rettssak|stämning|tingsrätt|retssag|oikeudenkäynti|Gericht|Klage\b|Ermittlung"),
+    ("deal", r"\bacqui(?:re|res|red|sition)\b|\bmerger\b|\bbuyout\b|\btakeover\b|\bdeal\b|\btender offer\b"
+             r"|oppkjøp|\bfusjon|förvärv|uppköpserbjudande|\bfusion|opkøb|købstilbud|yritysosto"
+             r"|Übernahme|Übernahmeangebot|\bFusion"),
+    ("capital", r"\bdividend\b|\bbuyback\b|\brepurchase\b|\bstock split\b|\boffering\b"
+                r"|\bshare issue\b|\bprivate placement\b|\brights issue\b"
+                r"|utbytte|utdelning|udbytte|osinko|Dividende|tilbakekjøp|återköp|tilbagekøb|Aktienrückkauf"
+                r"|emisjon|nyemission|Kapitalerhöhung"),
+    ("people", r"\bCEO\b|\bCFO\b|\bresign|\bsteps down\b|\bappoint"
+               r"|konsernsjef|administrerende direktør|verkställande direktör|\bVD\b|finansdirektør"
+               r"|toimitusjohtaja|Vorstand|fratrer|avgår|utnevn|udnævn"),
+    ("risk", r"\brecall\b|\bbankrupt|\bdefault\b|\bdelist|\bhack|\bbreach\b|\boutage\b|\bprofit warning\b"
+             r"|\bimpairment\b|konkurs|resultatvarsel|vinstvarning|nedskrivning|Insolvenz|Gewinnwarnung"
+             r"|cyberangrep|dataangrep|it-angrep"),
+    ("insider", r"\bmandatory notification of trade\b|\bmanagers?'? transactions?\b|\bPDMR\b"
+                r"|\bdirectors'? dealings?\b|meldepliktig handel|insynshandel|ledende medarbejderes transaktioner"
+                r"|johtohenkilöiden liiketoimet|Eigengeschäfte"),
+    ("holdings", r"\bmajor shareholding|\bdisclosure of large shareholding|\bflagging\b|flaggemelding"
+                 r"|större innehav|storaktionærmeddelelse|liputusilmoitus|Stimmrechtsmitteilung"),
 ]
+# Inside information under Art. 17 MAR (and German ad hoc notices): the
+# European counterpart of the 8-K items flagged with "!".
+INSIDE_INFO = re.compile(r"inside information|innsideinformasjon|insiderinformation|intern viden"
+                         r"|sisäpiiritieto|Insiderinformation|\bad[ -]hoc\b", re.I)
 
 
 class NewsError(Exception):
@@ -147,8 +212,37 @@ class Fetcher(object):
             raise NewsError("could not reach %s: %s" % (url, exc.reason))
 
 
+def split_ticker(ticker):
+    """("BASE", "SUFFIX") for an exchange listing, ("BASE", None) for US."""
+    t = ticker.strip().upper().replace(" ", "-")
+    if "." in t:
+        base, suf = t.rsplit(".", 1)
+        if base and (suf in EXCHANGES or (len(suf) >= 2 and suf.isalpha())):
+            return base, suf
+    return t, None
+
+
+def is_foreign_listing(ticker):
+    return split_ticker(ticker)[1] is not None
+
+
+def venue(ticker):
+    suf = split_ticker(ticker)[1]
+    return EXCHANGES.get(suf, (None, "." + suf))[1] if suf else "US"
+
+
 def yahoo_symbol(ticker):
-    return ticker.upper().replace(".", "-")
+    """Yahoo's symbol: US share classes take a dash (BRK.B -> BRK-B), an
+    exchange suffix keeps its dot (EQNR.OL, BT-A.L)."""
+    base, suf = split_ticker(ticker)
+    base = base.replace(".", "-")
+    return "%s.%s" % (base, suf) if suf else base
+
+
+def yahoo_url(ticker):
+    suf = split_ticker(ticker)[1]
+    region = EXCHANGES.get(suf, ("US",))[0] if suf else "US"
+    return YAHOO % (urllib.parse.quote(yahoo_symbol(ticker), safe=".-^"), region)
 
 
 def cik_map(fetcher, state):
@@ -160,6 +254,43 @@ def cik_map(fetcher, state):
     for v in data.values():
         cached.setdefault(v["ticker"].upper().replace("-", "."), str(v["cik_str"]).zfill(10))
     return cached
+
+
+def filer_kind(fetcher, state, cik, now):
+    """"foreign" (files 20-F/40-F/6-K) or "domestic", from SEC submissions,
+    cached in state for 30 days. Unknown counts as domestic."""
+    cache = state.setdefault("filers", {})
+    hit = cache.get(cik)
+    if hit and hit.get("checked", "") >= (now - _dt.timedelta(days=FILER_TTL_DAYS)).isoformat():
+        return hit["kind"]
+    data = json.loads(fetcher.get(SUBMISSIONS_URL % cik, "submissions-CIK%s.json" % cik,
+                                  sec=True).decode("utf-8"))
+    forms = set(((data.get("filings") or {}).get("recent") or {}).get("form") or [])
+    kind = "foreign" if (forms & FOREIGN_FORMS) and not (forms & DOMESTIC_FORMS) else "domestic"
+    cache[cik] = {"kind": kind, "checked": now.isoformat()}
+    return kind
+
+
+def load_sources(path):
+    """trader/news_sources.json -> {TICKER: {"name", "sec", "feeds": [{url, label}]}}."""
+    raw = load_json(path) or {}
+    out = {}
+    for t, v in raw.items():
+        if t.startswith("_") or not isinstance(v, dict):
+            continue
+        feeds = []
+        for f in v.get("feeds") or []:
+            if isinstance(f, str):
+                f = {"url": f}
+            if isinstance(f, dict) and f.get("url"):
+                feeds.append({"url": f["url"], "label": f.get("label") or _host(f["url"])})
+        out[t.upper()] = {"name": v.get("name"), "sec": (v.get("sec") or "").upper() or None,
+                          "feeds": feeds}
+    return out
+
+
+def _host(url):
+    return urllib.parse.urlsplit(url).netloc or "feed"
 
 
 # ---------------------------------------------------------------- parsing
@@ -211,6 +342,70 @@ def parse_rss(data, ticker):
     return out
 
 
+def _texts(el, name):
+    return [(c.text or "").strip() for c in el.iter() if _local(c.tag) == name and (c.text or "").strip()]
+
+
+def _strip_html(text):
+    return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", text or "")).strip()
+
+
+def _regulatory(ticker, label, ident, title, summary, link, when, categories):
+    hay = " ".join([title, summary] + categories)
+    return {"id": "feed:" + (ident or link or title), "source": label, "kind": "regulatory",
+            "ticker": ticker, "title": title, "summary": summary[:500], "link": link,
+            "categories": categories, "important": bool(INSIDE_INFO.search(hay)),
+            "time": parse_time(when)}
+
+
+def parse_feed(data, ticker, label):
+    """An exchange-announcement feed (RSS 2.0, Atom or JSON Feed) -> items."""
+    head = data.lstrip()[:1]
+    if head in (b"{", b"["):
+        try:
+            doc = json.loads(data.decode("utf-8"))
+        except ValueError as exc:
+            raise NewsError("%s feed for %s is not valid JSON: %s" % (label, ticker, exc))
+        entries = doc.get("items") if isinstance(doc, dict) else doc
+        out = []
+        for e in entries or []:
+            if not isinstance(e, dict):
+                continue
+            c = e.get("content") if isinstance(e.get("content"), dict) else {}
+            title = e.get("title") or c.get("title") or ""
+            summary = _strip_html(e.get("summary") or e.get("content_text") or c.get("preamble") or "")
+            link = e.get("url") or e.get("link") or e.get("external_url") or ""
+            when = (e.get("date_published") or e.get("publish_date") or e.get("published")
+                    or e.get("date") or "")
+            cats = [str(x) for x in (e.get("tags") or []) if isinstance(x, (str, int))]
+            ident = str(e.get("id") or e.get("news_id") or "")
+            out.append(_regulatory(ticker, label, ident, title, summary, link, when, cats))
+        return out
+    try:
+        root = ET.fromstring(data)
+    except ET.ParseError as exc:
+        raise NewsError("%s feed for %s is not valid XML: %s" % (label, ticker, exc))
+    out = []
+    for el in root.iter():
+        name = _local(el.tag)
+        if name == "item":
+            link = _text(el, "link")
+            out.append(_regulatory(ticker, label, _text(el, "guid") or link, _text(el, "title"),
+                                   _strip_html(_text(el, "description")), link,
+                                   _text(el, "pubDate") or _text(el, "date"), _texts(el, "category")))
+        elif name == "entry":
+            link = ""
+            for c in el.iter():
+                if _local(c.tag) == "link" and c.get("rel", "alternate") == "alternate":
+                    link = c.get("href", "")
+                    break
+            cats = [c.get("term") or c.get("label") or "" for c in el.iter() if _local(c.tag) == "category"]
+            out.append(_regulatory(ticker, label, _text(el, "id") or link, _text(el, "title"),
+                                   _strip_html(_text(el, "summary") or _text(el, "content")), link,
+                                   _text(el, "published") or _text(el, "updated"), [c for c in cats if c]))
+    return out
+
+
 def parse_sec_atom(data, ticker):
     """EDGAR company filings Atom -> items."""
     try:
@@ -249,6 +444,9 @@ def mention_patterns(watch):
     for t, name in watch.items():
         alts = [r"\(%s\)" % re.escape(t), r"\$%s\b" % re.escape(t),
                 r"\b(?:NYSE|NASDAQ|Nasdaq)\s*:\s*%s\b" % re.escape(t)]
+        base, suf = split_ticker(t)
+        if suf:
+            alts.append(r"\b%s\s*:\s*%s\b" % (VENUE_PREFIXES, re.escape(base)))
         if name and len(name) >= 4:
             alts.append(r"\b%s\b" % re.escape(name).replace(r"\ ", r"[\s-]"))
         pats[t] = re.compile("|".join(alts))
@@ -259,13 +457,15 @@ def tag(items, watch):
     """Which of your tickers each item touches, and why it matters."""
     pats = mention_patterns(watch)
     for it in items:
-        hay = "%s %s" % (it["title"], it.get("summary") or "")
+        hay = " ".join([it["title"], it.get("summary") or ""] + it.get("categories", []))
         touches = {it["ticker"]} if it["ticker"] in watch else set()
         for t, rx in pats.items():
             if rx.search(hay):
                 touches.add(t)
         it["touches"] = sorted(touches)
         it["tags"] = [label for label, rx in KEYWORDS if re.search(rx, hay, re.I)]
+        if it["kind"] == "regulatory" and it.get("important") and "inside info" not in it["tags"]:
+            it["tags"].insert(0, "inside info")
         if it["kind"] == "filing" and "2.02" in it.get("items", []) and "earnings" not in it["tags"]:
             it["tags"].insert(0, "earnings")
     return items
@@ -298,14 +498,38 @@ def fingerprint(it):
 
 # ---------------------------------------------------------------- the check
 
-def collect(fetcher, watch, state, sec=True, forms=("8-K",), count=10, errors=None):
+def collect(fetcher, watch, state, sec=True, forms=None, count=10, errors=None,
+            sources=None, now=None, coverage=None):
+    """Every item from every source for the watch list.
+
+    forms None means auto: 8-K for US filers, 6-K for foreign private
+    issuers. coverage (a dict) is filled with what each ticker was checked
+    against, so a silent source is never mistaken for a quiet company."""
     errors = [] if errors is None else errors
+    sources = sources or {}
+    now = now or _dt.datetime.now(_dt.timezone.utc)
+    coverage = {} if coverage is None else coverage
     items = []
     for t in sorted(watch):
+        cov = coverage.setdefault(t, {"venue": venue(t), "headlines": False,
+                                      "filings": None, "regulatory": []})
         try:
-            items += parse_rss(fetcher.get(YAHOO % yahoo_symbol(t), "yahoo-%s.xml" % t), t)
+            items += parse_rss(fetcher.get(yahoo_url(t), "yahoo-%s.xml" % t), t)
+            cov["headlines"] = True
         except NewsError as exc:
             errors.append("headlines for %s: %s" % (t, exc))
+        for n, feed in enumerate(sources.get(t, {}).get("feeds", [])):
+            if "REPLACE" in feed["url"].upper():
+                errors.append("feed for %s is still a placeholder (%s): put the real URL in"
+                              % (t, feed["url"]))
+                continue
+            ext = "json" if feed["url"].lower().split("?")[0].endswith(".json") else "xml"
+            try:
+                data = fetcher.get(feed["url"], "feed-%s-%d.%s" % (t, n, ext))
+                items += parse_feed(data, t, feed["label"])
+                cov["regulatory"].append(feed["label"])
+            except NewsError as exc:
+                errors.append("%s feed for %s: %s" % (feed["label"], t, exc))
     if sec:
         try:
             ciks = cik_map(fetcher, state)
@@ -313,19 +537,50 @@ def collect(fetcher, watch, state, sec=True, forms=("8-K",), count=10, errors=No
             errors.append("SEC ticker list: %s" % exc)
             ciks = {}
         for t in sorted(watch):
-            cik = ciks.get(t)
+            sec_t = sources.get(t, {}).get("sec") or (None if is_foreign_listing(t) else t)
+            if not sec_t:
+                continue  # a European listing with no US ticker mapped: covered by the notes
+            cik = ciks.get(sec_t)
             if not cik:
                 if ciks:
-                    errors.append("no SEC CIK for %s" % t)
+                    errors.append("no SEC CIK for %s" % sec_t)
                 continue
-            for form in forms:
+            want = forms
+            if not want:
+                try:
+                    want = ["6-K"] if filer_kind(fetcher, state, cik, now) == "foreign" else ["8-K"]
+                except (NewsError, ValueError) as exc:
+                    errors.append("SEC filer type for %s (reading 8-K): %s" % (sec_t, exc))
+                    want = ["8-K"]
+            got = []
+            for form in want:
                 try:
                     data = fetcher.get(SEC_FEED % (cik, form, count),
                                        "sec-%s-%s.xml" % (form, cik), sec=True)
                     items += parse_sec_atom(data, t)
+                    got.append(form)
                 except NewsError as exc:
                     errors.append("SEC %s for %s: %s" % (form, t, exc))
+            if got:
+                coverage[t]["filings"] = "%s (%s)" % (",".join(got), sec_t)
     return items
+
+
+def coverage_notes(coverage, sources_path):
+    """One line per non-US listing that has no exchange-announcement feed."""
+    notes = []
+    for t in sorted(coverage):
+        c = coverage[t]
+        if c["venue"] == "US" or c["regulatory"]:
+            continue
+        what = "Yahoo headlines" if c["headlines"] else "nothing"
+        if c["filings"]:
+            what += " and SEC %s" % c["filings"]
+        notes.append("%s (%s): no exchange-announcement feed, so its regulatory news (inside "
+                     "information, reports, insider trades) was NOT checked; only %s ran. Quiet "
+                     "here does not mean nothing was announced. Add a feed in %s."
+                     % (t, c["venue"], what, sources_path))
+    return notes
 
 
 def select(items, state, now, hours=48, show_all=False):
@@ -392,22 +647,29 @@ def main(argv=None):
     ap.add_argument("--state", default="trader/state/news.json")
     ap.add_argument("--hours", type=float, default=48, help="ignore items older than this")
     ap.add_argument("--all", action="store_true", help="show seen items too")
-    ap.add_argument("--forms", default="8-K", help="SEC forms to watch, comma separated")
+    ap.add_argument("--forms", default="auto",
+                    help="SEC forms, comma separated; auto = 8-K for US filers, 6-K for foreign")
     ap.add_argument("--no-sec", action="store_true", help="headlines only")
     ap.add_argument("--user-agent", help="SEC User-Agent: \"Your Name you@example.com\"")
     ap.add_argument("--config", default="trader/config.json")
+    ap.add_argument("--sources", default="trader/news_sources.json",
+                    help="exchange-announcement feeds and US tickers per listing")
     ap.add_argument("--offline", metavar="DIR")
     ap.add_argument("--now", help="ISO time, for reproducible runs")
     ap.add_argument("--dry-run", action="store_true", help="do not update the state file")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args(argv)
 
+    sources = load_sources(args.sources)
     if args.tickers:
         watch = {t.upper(): None for t in args.tickers}
         known = watch_from_files(args.portfolio, args.targets)
         watch.update({t: known[t] for t in watch if known.get(t)})
     else:
         watch = watch_from_files(args.portfolio, args.targets)
+    for t in watch:
+        if not watch[t] and sources.get(t, {}).get("name"):
+            watch[t] = sources[t]["name"]
     if not watch:
         print("news: no tickers. Pass --tickers, or create trader/portfolio.json or "
               "trader/targets.json first (/trader-copycat writes targets).", file=sys.stderr)
@@ -423,12 +685,17 @@ def main(argv=None):
         sec = False
     fetcher = Fetcher(ua, offline=args.offline)
     forms = [f.strip().upper() for f in args.forms.split(",") if f.strip()]
-    items = collect(fetcher, watch, state, sec=sec, forms=forms, errors=errors)
+    if forms == ["AUTO"]:
+        forms = None
+    coverage = {}
+    items = collect(fetcher, watch, state, sec=sec, forms=forms, errors=errors,
+                    sources=sources, now=now, coverage=coverage)
+    errors += coverage_notes(coverage, args.sources)
     items = dedupe(tag(items, watch))
     shown = select(items, state, now, hours=args.hours, show_all=args.all)
     if args.json:
         print(json.dumps({"checked": now.isoformat(), "items": _json_ready(shown),
-                          "notes": errors}, indent=2))
+                          "coverage": coverage, "notes": errors}, indent=2))
     else:
         sys.stdout.write(render(shown, errors, now))
     if not args.dry_run:

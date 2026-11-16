@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"><channel><title>Equinor regulatory announcements (synthetic test feed)</title>
+<item>
+  <title>Equinor ASA: Mandatory notification of trade</title>
+  <link>https://example.org/eqnr/ann/1002</link>
+  <guid>ann-1002</guid>
+  <pubDate>Tue, 13 Oct 2026 14:30:00 +0200</pubDate>
+  <category>Mandatory notification of trade primary insiders</category>
+  <description>&lt;p&gt;A primary insider bought 2,000 shares.&lt;/p&gt;</description>
+</item>
+<item>
+  <title>Equinor ASA: Nedskrivning av feltverdier</title>
+  <link>https://example.org/eqnr/ann/1001</link>
+  <guid>ann-1001</guid>
+  <pubDate>Tue, 13 Oct 2026 07:00:00 +0200</pubDate>
+  <category>Innsideinformasjon</category>
+  <description>Selskapet bokfører en nedskrivning i tredje kvartal.</description>
+</item>
+</channel></rss>

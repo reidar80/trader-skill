@@ -56,6 +56,95 @@ class Feeds(unittest.TestCase):
 
     def test_yahoo_symbols(self):
         self.assertEqual(news.yahoo_symbol("BRK.B"), "BRK-B")
+        self.assertEqual(news.yahoo_symbol("brk.b"), "BRK-B")
+        # exchange suffixes keep their dot
+        self.assertEqual(news.yahoo_symbol("EQNR.OL"), "EQNR.OL")
+        self.assertEqual(news.yahoo_symbol("VOLV-B.ST"), "VOLV-B.ST")
+        self.assertEqual(news.yahoo_symbol("VOLV B.ST"), "VOLV-B.ST")
+        self.assertEqual(news.yahoo_symbol("BT.A.L"), "BT-A.L")
+        self.assertEqual(news.yahoo_symbol("SAP.DE"), "SAP.DE")
+        self.assertEqual(news.yahoo_symbol("SHOP.TO"), "SHOP.TO")
+
+    def test_yahoo_region_from_suffix(self):
+        self.assertIn("s=EQNR.OL&region=NO&", news.yahoo_url("EQNR.OL"))
+        self.assertIn("s=SAP.DE&region=DE&", news.yahoo_url("SAP.DE"))
+        self.assertIn("s=AAPL&region=US&", news.yahoo_url("AAPL"))
+        self.assertIn("s=BRK-B&region=US&", news.yahoo_url("BRK.B"))
+        self.assertEqual(news.venue("NOVO-B.CO"), "Nasdaq Copenhagen")
+        self.assertEqual(news.venue("AAPL"), "US")
+        self.assertFalse(news.is_foreign_listing("BRK.B"))
+        self.assertTrue(news.is_foreign_listing("VOD.L"))
+
+
+class European(unittest.TestCase):
+    """Fixtures for EQNR.OL and SAP.DE are synthetic, written for these tests."""
+
+    def test_rss_announcement_feed(self):
+        items = news.parse_feed(raw("feed-EQNR.OL-0.xml"), "EQNR.OL", "Equinor IR")
+        self.assertEqual(len(items), 2)
+        trade, impairment = items
+        self.assertEqual(trade["kind"], "regulatory")
+        self.assertEqual(trade["source"], "Equinor IR")
+        self.assertFalse(trade["important"])
+        self.assertEqual(trade["summary"], "A primary insider bought 2,000 shares.")
+        self.assertEqual(trade["time"].isoformat(), "2026-10-13T12:30:00+00:00")
+        self.assertTrue(impairment["important"])  # Innsideinformasjon = inside information
+        news.tag(items, {"EQNR.OL": "Equinor"})
+        self.assertIn("insider", trade["tags"])
+        self.assertEqual(impairment["tags"][:2], ["inside info", "risk"])  # nedskrivning
+
+    def test_json_feed(self):
+        items = news.parse_feed(raw("feed-SAP.DE-0.json"), "SAP.DE", "SAP IR")
+        self.assertEqual(len(items), 1)
+        self.assertTrue(items[0]["important"])  # ad hoc
+        self.assertEqual(items[0]["link"], "https://example.org/sap/adhoc/77")
+        self.assertEqual(items[0]["time"].hour, 14)
+
+    def test_atom_feed(self):
+        data = (b'<feed xmlns="http://www.w3.org/2005/Atom"><entry><id>x1</id>'
+                b'<title>Volvo: Interim report Q3</title><link href="https://example.org/v/1"/>'
+                b'<updated>2026-10-13T06:00:00Z</updated><category term="Regulatory"/></entry></feed>')
+        items = news.tag(news.parse_feed(data, "VOLV-B.ST", "Volvo"), {"VOLV-B.ST": "Volvo"})
+        self.assertEqual(items[0]["link"], "https://example.org/v/1")
+        self.assertEqual(items[0]["categories"], ["Regulatory"])
+        self.assertIn("earnings", items[0]["tags"])
+
+    def test_bad_feed_is_an_error(self):
+        with self.assertRaises(news.NewsError):
+            news.parse_feed(b"<html><body>not a feed", "X.OL", "X")
+
+    def test_nordic_keywords(self):
+        items = [{"id": "a", "kind": "headline", "ticker": "X.ST", "title": t, "summary": "",
+                  "link": "", "time": None} for t in
+                 ["Bolaget offentliggör delårsrapport", "Styrelsen föreslår utdelning",
+                  "Konsernsjef fratrer", "Flaggemelding"]]
+        tags = [i["tags"] for i in news.tag(items, {})]
+        self.assertEqual(tags, [["earnings"], ["capital"], ["people"], ["holdings"]])
+
+    def test_venue_prefixed_symbol_is_a_mention(self):
+        it = {"id": "a", "kind": "headline", "ticker": "AAPL", "title": "Deal news (OSE: EQNR)",
+              "summary": "", "link": "", "time": None}
+        news.tag([it], {"EQNR.OL": None, "AAPL": None})
+        self.assertEqual(it["touches"], ["AAPL", "EQNR.OL"])
+
+    def test_sources_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "s.json")
+            with open(path, "w") as fh:
+                json.dump({"_readme": ["x"], "eqnr.ol": {"name": "Equinor", "sec": "eqnr",
+                           "feeds": ["https://a.example/rss", {"url": "https://b.example/x", "label": "B"}]}}, fh)
+            src = news.load_sources(path)
+        self.assertEqual(list(src), ["EQNR.OL"])
+        self.assertEqual(src["EQNR.OL"]["sec"], "EQNR")
+        self.assertEqual([f["label"] for f in src["EQNR.OL"]["feeds"]], ["a.example", "B"])
+
+    def test_foreign_filer_gets_6k(self):
+        state = {}
+        f = news.Fetcher(offline=DIR)
+        now = news.parse_time(NOW)
+        self.assertEqual(news.filer_kind(f, state, "0001140625", now), "foreign")
+        self.assertEqual(news.filer_kind(f, state, "0000320193", now), "domestic")
+        self.assertIn("0001140625", state["filers"])
 
 
 class Tagging(unittest.TestCase):
@@ -140,6 +229,49 @@ class Check(unittest.TestCase):
         finally:
             if old is not None:
                 os.environ["SEC_USER_AGENT"] = old
+
+    def _sources(self, data):
+        path = os.path.join(self.tmp.name, "sources.json")
+        with open(path, "w") as fh:
+            json.dump(data, fh)
+        return ["--sources", path]
+
+    def test_european_listing_with_feed_and_adr(self):
+        src = self._sources({"EQNR.OL": {"name": "Equinor", "sec": "EQNR",
+                                         "feeds": [{"label": "Equinor IR", "url": "https://x.example/rss"}]}})
+        code, out, err = run(["--tickers", "EQNR.OL", "--hours", "48", "--json"] + src + self.base)
+        self.assertEqual(code, 0, err)
+        data = json.loads(out)
+        kinds = sorted(i["kind"] for i in data["items"])
+        self.assertEqual(kinds, ["filing", "headline", "regulatory", "regulatory"])
+        filing = [i for i in data["items"] if i["kind"] == "filing"][0]
+        self.assertEqual(filing["form"], "6-K")  # auto: Equinor files 20-F, so 6-K not 8-K
+        self.assertEqual(data["coverage"]["EQNR.OL"]["filings"], "6-K (EQNR)")
+        self.assertEqual(data["coverage"]["EQNR.OL"]["regulatory"], ["Equinor IR"])
+        self.assertEqual(data["notes"], [])
+        self.assertTrue(all(i["touches"] == ["EQNR.OL"] for i in data["items"]))
+
+    def test_european_listing_without_feed_is_named(self):
+        src = self._sources({})
+        code, out, err = run(["--tickers", "VOLV-B.ST", "AAPL", "--hours", "24"] + src + self.base)
+        self.assertIn("VOLV-B.ST (Nasdaq Stockholm): no exchange-announcement feed", out)
+        self.assertIn("does not mean nothing was announced", out)
+        self.assertNotIn("no SEC CIK for VOLV", out)
+        self.assertNotIn("AAPL (US)", out)
+
+    def test_placeholder_feed_is_not_fetched(self):
+        src = self._sources({"VOLV-B.ST": {"feeds": ["https://REPLACE-WITH-VOLVO-RSS"]}})
+        code, out, err = run(["--tickers", "VOLV-B.ST", "--hours", "24"] + src + self.base)
+        self.assertIn("still a placeholder", out)
+        self.assertNotIn("offline: no file", out)
+        self.assertIn("no exchange-announcement feed", out)
+
+    def test_explicit_forms_override_auto(self):
+        src = self._sources({"EQNR.OL": {"sec": "EQNR"}})
+        code, out, err = run(["--tickers", "EQNR.OL", "--forms", "8-K", "--hours", "2400",
+                              "--json"] + src + self.base)
+        notes = json.loads(out)["notes"]
+        self.assertTrue(any("SEC 8-K for EQNR.OL" in n for n in notes), notes)
 
     def test_state_forgets_after_30_days(self):
         state = {"seen": {"old": "2026-08-01T00:00:00+00:00"}}

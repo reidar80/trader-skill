@@ -179,13 +179,37 @@ def market_status(now_utc):
 
 # ---------------------------------------------------------------- quotes
 
+# Yahoo exchange suffixes (EQNR.OL, SAP.DE, VOD.L). Two or more letters is
+# always an exchange; a single letter is a US share class (BRK.B) except
+# L (London) and F (Frankfurt). Same rule as trader-news.
+SINGLE_LETTER_EXCHANGES = {"L", "F"}
+
+
+def split_symbol(sym):
+    t = sym.strip().upper().replace(" ", "-")
+    if "." in t:
+        base, suf = t.rsplit(".", 1)
+        if base and (suf in SINGLE_LETTER_EXCHANGES or (len(suf) >= 2 and suf.isalpha())):
+            return base, suf
+    return t, None
+
+
+def yahoo_symbol(sym):
+    base, suf = split_symbol(sym)
+    base = base.replace(".", "-")
+    return "%s.%s" % (base, suf) if suf else base
+
+
 def stooq_url(sym):
+    if split_symbol(sym)[1]:
+        raise AlertError("%s is not a US listing; the stooq source here reads US tickers only, "
+                         "use --source yahoo" % sym.upper())
     return "https://stooq.com/q/l/?s=%s.us&f=sd2t2ohlcv&h&e=csv" % sym.lower().replace(".", "-")
 
 
 def yahoo_url(sym):
     return "https://query1.finance.yahoo.com/v8/finance/chart/%s?range=1d&interval=1d" % (
-        sym.upper().replace(".", "-"))
+        yahoo_symbol(sym))
 
 
 def parse_stooq(text, sym):
@@ -429,9 +453,12 @@ def cmd_quote(a):
             q = quotes.get(s)
             if q:
                 chg = ""
+                cur = q.get("currency") or "USD"
+                money = (lambda v: "$%.2f" % v) if cur == "USD" else (lambda v: "%.2f %s" % (v, cur))
                 if q.get("prev_close"):
-                    chg = " (%+.2f%% vs prev close $%.2f)" % (100.0 * (q["price"] / q["prev_close"] - 1), q["prev_close"])
-                print("%-6s $%.2f%s  %s  [%s]" % (s, q["price"], chg, q.get("time", ""), q["source"]))
+                    chg = " (%+.2f%% vs prev close %s)" % (100.0 * (q["price"] / q["prev_close"] - 1),
+                                                         money(q["prev_close"]))
+                print("%-6s %s%s  %s  [%s]" % (s, money(q["price"]), chg, q.get("time", ""), q["source"]))
         for e in errors:
             print("error: " + e)
         if a.write and quotes:

@@ -96,6 +96,11 @@ class Quotes(unittest.TestCase):
     def test_urls(self):
         self.assertEqual(alerts.stooq_url("BRK.B"), "https://stooq.com/q/l/?s=brk-b.us&f=sd2t2ohlcv&h&e=csv")
         self.assertIn("/chart/BRK-B?", alerts.yahoo_url("brk.b"))
+        self.assertIn("/chart/EQNR.OL?", alerts.yahoo_url("eqnr.ol"))
+        self.assertIn("/chart/VOLV-B.ST?", alerts.yahoo_url("VOLV-B.ST"))
+        self.assertIn("/chart/BT-A.L?", alerts.yahoo_url("BT.A.L"))
+        with self.assertRaises(alerts.AlertError):
+            alerts.stooq_url("EQNR.OL")
 
     def test_offline_quotes_and_errors(self):
         q, errors = alerts.get_quotes(["AAPL", "KO", "ZZZZ", "NOPE"], "yahoo", QDIR)
