@@ -71,6 +71,15 @@ class Index(unittest.TestCase):
             ptr.parse_index(b"not xml", 2026)
 
 
+class Safety(unittest.TestCase):
+    def test_doc_id_must_be_a_number(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            for bad in ("../../evil", "2003/5143", "20035143.pdf", "", "abc"):
+                with self.assertRaises(ptr.PtrError, msg=bad):
+                    ptr._fetch_and_read(bad, 2026, os.path.join(tmp, "pdfs"))
+            self.assertEqual(os.listdir(tmp), [])  # nothing created outside, nothing fetched
+
+
 class NewSinceLastCheck(unittest.TestCase):
     def test_alerts_once(self):
         with tempfile.TemporaryDirectory() as tmp:

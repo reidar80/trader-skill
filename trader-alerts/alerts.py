@@ -46,7 +46,8 @@ import time
 import urllib.error
 import urllib.request
 
-UA = "Mozilla/5.0 (compatible; trader-skill/1.0; +https://github.com/Jakeschincariol/trader-skill)"
+UA = "Mozilla/5.0 (compatible; trader-skill/1.0; +https://github.com/reidar80/trader-skill)"
+MAX_BYTES = 2 * 1024 * 1024  # a quote is a few kilobytes
 PAUSE = 0.5  # seconds between requests: be polite to free endpoints
 
 NYSE_HOLIDAYS = {
@@ -261,7 +262,10 @@ def fetch(url, timeout=20):
     req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": "*/*"})
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
-            return r.read().decode("utf-8", "replace")
+            data = r.read(MAX_BYTES + 1)
+            if len(data) > MAX_BYTES:
+                raise AlertError("%s sent more than %d bytes" % (url.split("?")[0], MAX_BYTES))
+            return data.decode("utf-8", "replace")
     except urllib.error.HTTPError as e:
         raise AlertError("%s answered HTTP %d" % (url.split("?")[0], e.code))
     except urllib.error.URLError as e:

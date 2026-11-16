@@ -1,0 +1,4 @@
+__pycache__/
+*.pyc
+# your own data: budgets, holdings, state, SEC contact details
+/trader/

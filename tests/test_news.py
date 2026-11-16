@@ -147,6 +147,43 @@ class European(unittest.TestCase):
         self.assertIn("0001140625", state["filers"])
 
 
+class _Resp(object):
+    def __init__(self, body, gz=False):
+        self._b, self.headers = io.BytesIO(body), ({"Content-Encoding": "gzip"} if gz else {})
+
+    def read(self, n=-1):
+        return self._b.read(n)
+
+
+class Safety(unittest.TestCase):
+    def test_only_public_https_urls(self):
+        self.assertEqual(news.check_url("https://example.org/feed.xml"), "https://example.org/feed.xml")
+        for bad in ("file:///etc/passwd", "http://example.org/rss", "ftp://example.org/x",
+                    "https://localhost/x", "https://127.0.0.1/x", "https://10.0.0.5/x",
+                    "https://169.254.169.254/latest/meta-data", "https://[::1]/x",
+                    "https://nas.local/feed", "https:///nohost", "/etc/passwd"):
+            with self.assertRaises(news.NewsError, msg=bad):
+                news.check_url(bad)
+
+    def test_fetcher_refuses_before_any_request(self):
+        with self.assertRaises(news.NewsError):
+            news.Fetcher().get("file:///etc/hostname", "x")
+
+    def test_redirects_are_checked(self):
+        h = news._SafeRedirect()
+        with self.assertRaises(news.NewsError):
+            h.redirect_request(None, None, 302, "Found", {}, "http://169.254.169.254/")
+
+    def test_size_cap(self):
+        import gzip
+        self.assertEqual(news.read_capped(_Resp(b"abc"), 10), b"abc")
+        self.assertEqual(news.read_capped(_Resp(gzip.compress(b"abc"), gz=True), 100), b"abc")
+        with self.assertRaises(ValueError):
+            news.read_capped(_Resp(b"x" * 11), 10)
+        with self.assertRaises(ValueError):  # a small download that unzips huge
+            news.read_capped(_Resp(gzip.compress(b"x" * 100000), gz=True), 1000)
+
+
 class Tagging(unittest.TestCase):
     def test_touches_and_tags(self):
         items = news.parse_rss(raw("yahoo-KO.xml"), "KO")

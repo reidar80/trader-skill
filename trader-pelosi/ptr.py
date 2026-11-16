@@ -48,7 +48,8 @@ import zipfile
 INDEX_URL = "https://disclosures-clerk.house.gov/public_disc/financial-pdfs/%d%s.zip"
 PTR_URL = "https://disclosures-clerk.house.gov/public_disc/ptr-pdfs/%d/%s.pdf"
 FD_URL = "https://disclosures-clerk.house.gov/public_disc/financial-pdfs/%d/%s.pdf"
-UA = "trader-skill/1.0 (+https://github.com/Jakeschincariol/trader-skill)"
+MAX_BYTES = 60 * 1024 * 1024  # scanned PTRs run to a few MB
+UA = "trader-skill/1.0 (+https://github.com/reidar80/trader-skill)"
 FILING_TYPES = {
     "P": "Periodic Transaction Report", "O": "Annual report", "A": "Amendment",
     "C": "Candidate report", "X": "Extension", "T": "Termination report",
@@ -83,7 +84,10 @@ def download(url, timeout=60):
     req = urllib.request.Request(url, headers={"User-Agent": UA})
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return resp.read()
+            data = resp.read(MAX_BYTES + 1)
+            if len(data) > MAX_BYTES:
+                raise PtrError("%s sent more than %d bytes" % (url, MAX_BYTES))
+            return data
     except urllib.error.HTTPError as exc:
         raise PtrError("HTTP %s for %s" % (exc.code, url))
     except urllib.error.URLError as exc:
@@ -97,6 +101,8 @@ def read_index_bytes(data):
             names = [n for n in z.namelist() if n.lower().endswith(".xml")]
             if not names:
                 raise PtrError("no XML inside the ZIP (files: %s)" % ", ".join(z.namelist()))
+            if z.getinfo(names[0]).file_size > MAX_BYTES:
+                raise PtrError("the index inside the ZIP is over %d bytes" % MAX_BYTES)
             return z.read(names[0])
     return data
 
@@ -456,6 +462,10 @@ def _parser():
 
 
 def _fetch_and_read(doc_id, year, pdf_dir, filed=None):
+    # the DocID comes from a downloaded index and becomes a file name and a URL
+    doc_id = str(doc_id).strip()
+    if not re.fullmatch(r"\d{1,12}", doc_id):
+        raise PtrError("doc id %r is not a number; refusing to use it as a file name" % doc_id)
     os.makedirs(pdf_dir, exist_ok=True)
     path = os.path.join(pdf_dir, "%s.pdf" % doc_id)
     if not os.path.isfile(path):

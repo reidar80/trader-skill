@@ -43,7 +43,7 @@ nothing here as advice.
 import argparse
 import datetime as _dt
 import email.utils
-import gzip
+import ipaddress
 import hashlib
 import json
 import os
@@ -54,6 +54,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
+import zlib
 
 YAHOO = "https://feeds.finance.yahoo.com/rss/2.0/headline?s=%s&region=%s&lang=en-US"
 SEC_FEED = ("https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=%s&type=%s"
@@ -85,8 +86,9 @@ EXCHANGES = {
 # Exchange prefixes press releases put before a symbol ("OSE: EQNR").
 VENUE_PREFIXES = r"(?:OSE|OB|OSL|OSLO|STO|CPH|HEL|ICE|ETR|XETRA|FRA|EPA|AMS|EBR|ELI|ISE|BIT|MIL|BME|LON|LSE|SIX|SWX|VIE|WSE)"
 PLACEHOLDER = "you@example.com"
-BROWSER_UA = "Mozilla/5.0 (compatible; trader-skill/1.0; +https://github.com/Jakeschincariol/trader-skill)"
+BROWSER_UA = "Mozilla/5.0 (compatible; trader-skill/1.0; +https://github.com/reidar80/trader-skill)"
 KEEP_DAYS = 30
+MAX_BYTES = 5 * 1024 * 1024  # no feed here is anywhere near this
 
 ITEMS_8K = {
     "1.01": "material agreement", "1.02": "agreement ended", "1.03": "bankruptcy",
@@ -178,6 +180,48 @@ def sec_user_agent(cli=None, config="trader/config.json"):
 
 # ---------------------------------------------------------------- fetching
 
+def read_capped(resp, limit):
+    """The response body, gunzipped, refusing anything over limit bytes."""
+    data = resp.read(limit + 1)
+    if len(data) > limit:
+        raise ValueError("response is over %d bytes" % limit)
+    if resp.headers.get("Content-Encoding") == "gzip":
+        d = zlib.decompressobj(16 + zlib.MAX_WBITS)
+        data = d.decompress(data, limit + 1)
+        if len(data) > limit or d.unconsumed_tail:
+            raise ValueError("response is over %d bytes once unzipped" % limit)
+    return data
+
+
+def check_url(url):
+    """Only public https URLs are fetched: no file://, no http://, no
+    localhost or private addresses. Feed URLs come from a config file, so
+    they are not trusted."""
+    parts = urllib.parse.urlsplit(url)
+    if parts.scheme.lower() != "https":
+        raise NewsError("refusing %s: only https:// URLs are fetched" % url)
+    host = (parts.hostname or "").lower()
+    if not host or host == "localhost" or host.endswith((".localhost", ".local", ".internal")):
+        raise NewsError("refusing %s: not a public host" % url)
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return url
+    if not ip.is_global:
+        raise NewsError("refusing %s: not a public address" % url)
+    return url
+
+
+class _SafeRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        check_url(newurl)
+        return urllib.request.HTTPRedirectHandler.redirect_request(
+            self, req, fp, code, msg, headers, newurl)
+
+
+_OPENER = urllib.request.build_opener(_SafeRedirect)
+
+
 class Fetcher(object):
     def __init__(self, sec_ua=None, offline=None, pause=0.15):
         self.sec_ua = sec_ua
@@ -194,6 +238,7 @@ class Fetcher(object):
                 return fh.read()
         if sec and not self.sec_ua:
             raise NewsError("no SEC User-Agent set")
+        check_url(url)
         gap = time.time() - self._last
         if gap < self.pause:
             time.sleep(self.pause - gap)
@@ -201,11 +246,10 @@ class Fetcher(object):
         headers = {"User-Agent": self.sec_ua if sec else BROWSER_UA, "Accept-Encoding": "gzip"}
         req = urllib.request.Request(url, headers=headers)
         try:
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                data = resp.read()
-                if resp.headers.get("Content-Encoding") == "gzip":
-                    data = gzip.decompress(data)
-                return data
+            with _OPENER.open(req, timeout=30) as resp:
+                return read_capped(resp, MAX_BYTES)
+        except (ValueError, zlib.error) as exc:
+            raise NewsError("%s: %s" % (url, exc))
         except urllib.error.HTTPError as exc:
             raise NewsError("HTTP %s for %s" % (exc.code, url))
         except urllib.error.URLError as exc:
