@@ -71,8 +71,8 @@ class Repo(unittest.TestCase):
             readme = " ".join(fh.read().split())
         self.assertTrue(readme.startswith("# The Trader skill"))
         for line in (ABOUT,
-                     "https://github.com/Jakeschincariol/trader-skill install skill",
-                     "/plugin marketplace add Jakeschincariol/trader-skill",
+                     "https://github.com/reidar80/trader-skill install skill",
+                     "/plugin marketplace add reidar80/trader-skill",
                      "/plugin install trader-skill@trader-skill",
                      "## Fine print"):
             self.assertIn(line, readme)

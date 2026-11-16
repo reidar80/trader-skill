@@ -44,7 +44,7 @@ as DIR/<file name>). The tests use it.
 
 import argparse
 import datetime as _dt
-import gzip
+import zlib
 import json
 import os
 import re
@@ -75,6 +75,22 @@ UA_HELP = (
     "(with YOUR name and email)\n"
     "  2. export SEC_USER_AGENT=\"Your Name you@example.com\"\n"
     "  3. pass --user-agent \"Your Name you@example.com\"")
+
+
+def read_capped(resp, limit):
+    """The response body, gunzipped, refusing anything over limit bytes."""
+    data = resp.read(limit + 1)
+    if len(data) > limit:
+        raise ValueError("response is over %d bytes" % limit)
+    if resp.headers.get("Content-Encoding") == "gzip":
+        d = zlib.decompressobj(16 + zlib.MAX_WBITS)
+        data = d.decompress(data, limit + 1)
+        if len(data) > limit or d.unconsumed_tail:
+            raise ValueError("response is over %d bytes once unzipped" % limit)
+    return data
+
+
+MAX_BYTES = 300 * 1024 * 1024  # large 13F information tables are tens of MB
 
 
 class EdgarError(Exception):
@@ -154,10 +170,9 @@ class Fetcher(object):
         self._wait()
         try:
             with urllib.request.urlopen(req, timeout=60) as resp:
-                data = resp.read()
-                if resp.headers.get("Content-Encoding") == "gzip":
-                    data = gzip.decompress(data)
-                return data
+                return read_capped(resp, MAX_BYTES)
+        except (ValueError, zlib.error) as exc:
+            raise EdgarError("%s: %s" % (url, exc))
         except urllib.error.HTTPError as exc:
             if exc.code == 403 and "sec.gov" in url:
                 raise EdgarError("SEC said 403 Forbidden for %s. Usually a missing or "

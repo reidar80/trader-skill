@@ -41,7 +41,7 @@ Numbers only: this tool never says whether a stock is a buy.
 
 import argparse
 import datetime as _dt
-import gzip
+import zlib
 import json
 import os
 import re
@@ -70,6 +70,22 @@ CONCEPTS = {
     "eps_diluted": ["EarningsPerShareDiluted", "EarningsPerShareBasicAndDiluted"],
 }
 FLOWS = ("revenue", "cost_of_revenue", "gross_profit", "operating_income", "net_income")
+
+
+def read_capped(resp, limit):
+    """The response body, gunzipped, refusing anything over limit bytes."""
+    data = resp.read(limit + 1)
+    if len(data) > limit:
+        raise ValueError("response is over %d bytes" % limit)
+    if resp.headers.get("Content-Encoding") == "gzip":
+        d = zlib.decompressobj(16 + zlib.MAX_WBITS)
+        data = d.decompress(data, limit + 1)
+        if len(data) > limit or d.unconsumed_tail:
+            raise ValueError("response is over %d bytes once unzipped" % limit)
+    return data
+
+
+MAX_BYTES = 300 * 1024 * 1024  # the biggest companyfacts files are tens of MB
 
 
 class FactsError(Exception):
@@ -110,9 +126,9 @@ class Fetcher(object):
                                                    "Accept-Encoding": "gzip"})
         try:
             with urllib.request.urlopen(req, timeout=60) as resp:
-                data = resp.read()
-                if resp.headers.get("Content-Encoding") == "gzip":
-                    data = gzip.decompress(data)
+                data = read_capped(resp, MAX_BYTES)
+        except (ValueError, zlib.error) as exc:
+            raise FactsError("%s: %s" % (url, exc))
         except urllib.error.HTTPError as exc:
             if exc.code == 404:
                 raise FactsError("SEC has no data at %s (no XBRL filings for this CIK?)" % url)

@@ -19,7 +19,7 @@ order on its own. Paper trading is the default.
 Paste this into Claude:
 
 ```
-https://github.com/Jakeschincariol/trader-skill
+https://github.com/reidar80/trader-skill
 
 install skill
 ```
@@ -27,7 +27,7 @@ install skill
 Or as a plugin, in Claude Code:
 
 ```
-/plugin marketplace add Jakeschincariol/trader-skill
+/plugin marketplace add reidar80/trader-skill
 /plugin install trader-skill@trader-skill
 ```
 
@@ -36,7 +36,7 @@ Claude Code namespaces plugin skills, so installed as a plugin they show up as
 plain `/trader-copycat`:
 
 ```bash
-git clone https://github.com/Jakeschincariol/trader-skill.git
+git clone https://github.com/reidar80/trader-skill.git
 cp -r trader-skill/trader-* ~/.claude/skills/
 ```
 
@@ -148,6 +148,12 @@ for it in the chat. Set your brokerage tool to "Needs approval" in Claude
 own "Allow once / Deny" card is a second check. No options, margin, short
 selling or leverage unless you turn them on.
 
+**What it reads is not trusted.** Headlines, feeds, filings and disclosure
+PDFs are written by other people. The skills treat that text as data and never
+follow instructions found in it. The check you can rely on is Claude's own
+"Allow once / Deny" card: read it every time, because the typed yes and the
+risk check are both run by Claude.
+
 **Paper first.** `"paper": true` is the default in `config.example.json`, and
 Alpaca's MCP server defaults to its paper account. Keys live in environment
 variables, never in the chat.
@@ -185,4 +191,6 @@ trader-rebalance/  SKILL.md, rebalance.py
 tests/             unittest suite + offline fixtures
 ```
 
-MIT. Made by [Jake Schincariol](https://opusjake.ai).
+MIT. Made by [Jake Schincariol](https://opusjake.ai). This is a fork of
+[Jakeschincariol/trader-skill](https://github.com/Jakeschincariol/trader-skill) with European market coverage
+and security hardening; the install commands above point at the fork.
